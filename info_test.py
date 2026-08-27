@@ -49,7 +49,11 @@ class BuildMessagesTest(unittest.TestCase):
 
     def test_short_list_fits_in_one_message(self):
         messages = info.build_messages("Chans:", [ch("#a", "one"), ch("#b", "two")])
-        self.assertEqual(messages, ["Chans: | #a - one | #b - two"])
+        self.assertEqual(messages, ["Chans:\n#a - one\n#b - two"])
+
+    def test_entries_are_separated_by_line_breaks(self):
+        messages = info.build_messages("Chans:", [ch("#a", "one"), ch("#b", "two")])
+        self.assertEqual(messages[0].splitlines(), ["Chans:", "#a - one", "#b - two"])
 
     def test_every_message_respects_the_limit(self):
         channels = [ch("#chan%02d" % i, "description number %d" % i) for i in range(12)]

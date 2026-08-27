@@ -20,7 +20,7 @@ DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "
 MAX_MESSAGE_CHARS = 130
 
 # Separator between channel entries packed into the same message.
-ENTRY_SEPARATOR = " | "
+ENTRY_SEPARATOR = "\n"
 
 # Pause between messages so a multi-message broadcast does not hammer the
 # repeater. Channel sends are flood with no ACK, so this is pacing, not retry.
@@ -113,7 +113,13 @@ async def _default_sender(cfg, messages):
         for index, message in enumerate(messages):
             if index:
                 await asyncio.sleep(cfg["inter_message_delay_seconds"])
-            LOG.info("sending (%d chars): %s", len(message), message)
+            LOG.info(
+                "sending %d/%d (%d chars): %s",
+                index + 1,
+                len(messages),
+                len(message),
+                message.replace("\n", " / "),
+            )
             await mc.commands.send_chan_msg(cfg["channel_index"], message)
     finally:
         await mc.disconnect()
@@ -159,8 +165,10 @@ def main(argv=None):
         return 1
 
     if args.dry_run:
-        for message in build_messages(cfg["header"], cfg["channels"]):
-            print("[%3d] %s" % (len(message), message))
+        messages = build_messages(cfg["header"], cfg["channels"])
+        for index, message in enumerate(messages, 1):
+            print("--- message %d of %d (%d chars) ---" % (index, len(messages), len(message)))
+            print(message)
         return 0
 
     try:
