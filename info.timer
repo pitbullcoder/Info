@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly Marion Info Bot broadcast (Fridays, 8pm Eastern)
+
+[Timer]
+OnCalendar=Fri *-*-* 20:00:00 America/New_York
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

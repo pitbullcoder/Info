@@ -1,0 +1,10 @@
+[Unit]
+Description=Marion Info Bot - broadcast active mesh channel list
+After=network-online.target openhop-repeater.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/opt/info
+ExecStart=/usr/bin/python3 /opt/info/info.py --config /opt/info/config.json
