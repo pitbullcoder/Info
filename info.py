@@ -16,15 +16,8 @@ LOG = logging.getLogger("info")
 
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
-# MeshCore transmission ceiling. Messages are built to fit under this.
+# MeshCore transmission ceiling. The broadcast is built to fit inside one of these.
 MAX_MESSAGE_CHARS = 130
-
-# Separator between channel entries packed into the same message.
-ENTRY_SEPARATOR = "\n"
-
-# Pause between messages so a multi-message broadcast does not hammer the
-# repeater. Channel sends are flood with no ACK, so this is pacing, not retry.
-DEFAULT_INTER_MESSAGE_DELAY_SECONDS = 6.0
 
 
 def load_config(path):
@@ -40,102 +33,74 @@ def load_config(path):
         raise ValueError("config 'channels' must be a non-empty list")
 
     for entry in cfg["channels"]:
-        if "name" not in entry:
-            raise ValueError("every channel entry needs a 'name'")
+        if not isinstance(entry, str) or not entry.strip():
+            raise ValueError("every channel entry must be a non-empty string")
 
     cfg.setdefault("header", "Marion mesh channels:")
-    cfg.setdefault("inter_message_delay_seconds", DEFAULT_INTER_MESSAGE_DELAY_SECONDS)
     return cfg
 
 
-def format_entry(entry):
-    """Render one channel as 'name - description', or just 'name' if bare."""
-    name = entry["name"].strip()
-    desc = (entry.get("desc") or "").strip()
-    if not desc:
-        return name
-    return "%s - %s" % (name, desc)
+def normalize_channel(name):
+    """Trim whitespace and ensure a single leading '#'."""
+    return "#" + name.strip().lstrip("#")
 
 
-def _truncate_entry(text, limit):
-    """Shorten an oversized entry to fit, marking it with an ellipsis."""
-    if limit <= 1:
-        return text[:limit]
-    return text[: limit - 1].rstrip() + "\u2026"
+def build_message(header, channels, limit=MAX_MESSAGE_CHARS):
+    """Render the header and channel names as one newline-separated message.
 
-
-def build_messages(header, channels, limit=MAX_MESSAGE_CHARS):
-    """Pack channel entries into self-contained messages of at most `limit` chars.
-
-    The header opens the first message. Each message is independently readable,
-    so a dropped packet costs one group of channels rather than garbling the
-    whole list.
+    If the full list would exceed `limit`, trailing channels are dropped and a
+    warning is logged — a short message that fits beats a long one the radio
+    silently mangles.
     """
     header = (header or "").strip()
-    messages = []
-    current = header
+    names = [normalize_channel(name) for name in channels]
 
-    for entry in channels:
-        text = format_entry(entry)
+    lines = ([header] if header else []) + names
+    dropped = []
 
-        if len(text) > limit:
-            LOG.warning("entry too long for one message, truncating: %s", text)
-            text = _truncate_entry(text, limit)
+    while lines and len("\n".join(lines)) > limit:
+        if len(lines) == 1:
+            # Nothing left but an oversized header; truncate it outright.
+            lines[0] = lines[0][:limit]
+            break
+        dropped.append(lines.pop())
 
-        if not current:
-            candidate = text
-        else:
-            candidate = current + ENTRY_SEPARATOR + text
+    if dropped:
+        LOG.warning(
+            "message exceeded %d chars; dropped %d channel(s): %s",
+            limit,
+            len(dropped),
+            ", ".join(reversed(dropped)),
+        )
 
-        if len(candidate) <= limit:
-            current = candidate
-            continue
-
-        if current:
-            messages.append(current)
-        current = text
-
-    if current:
-        messages.append(current)
-
-    return messages
+    return "\n".join(lines)
 
 
-async def _default_sender(cfg, messages):
-    """Connect to the companion over TCP and push each message to the channel.
+async def _default_sender(cfg, message):
+    """Connect to the companion over TCP and post the message to the channel.
 
-    Isolated here so the transport can be swapped without touching the packer.
+    Isolated here so the transport can be swapped without touching the builder.
     """
     from meshcore import MeshCore
 
     mc = await MeshCore.create_tcp(cfg["host"], cfg["port"])
     try:
-        for index, message in enumerate(messages):
-            if index:
-                await asyncio.sleep(cfg["inter_message_delay_seconds"])
-            LOG.info(
-                "sending %d/%d (%d chars): %s",
-                index + 1,
-                len(messages),
-                len(message),
-                message.replace("\n", " / "),
-            )
-            await mc.commands.send_chan_msg(cfg["channel_index"], message)
+        LOG.info("sending (%d chars): %s", len(message), message.replace("\n", " / "))
+        await mc.commands.send_chan_msg(cfg["channel_index"], message)
     finally:
         await mc.disconnect()
 
 
 async def broadcast(cfg, sender=None):
     """Build the channel list and hand it to the sender."""
-    messages = build_messages(cfg["header"], cfg["channels"])
-    if not messages:
+    message = build_message(cfg["header"], cfg["channels"])
+    if not message:
         LOG.warning("nothing to broadcast")
-        return []
+        return ""
 
-    LOG.info("broadcasting %d message(s)", len(messages))
     send = sender or _default_sender
-    await send(cfg, messages)
-    return messages
+    await send(cfg, message)
+    return message
 
 
 def parse_args(argv=None):
@@ -145,7 +110,7 @@ def parse_args(argv=None):
         "-n",
         "--dry-run",
         action="store_true",
-        help="print the messages that would be sent, without transmitting",
+        help="print the message that would be sent, without transmitting",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     return parser.parse_args(argv)
@@ -165,10 +130,9 @@ def main(argv=None):
         return 1
 
     if args.dry_run:
-        messages = build_messages(cfg["header"], cfg["channels"])
-        for index, message in enumerate(messages, 1):
-            print("--- message %d of %d (%d chars) ---" % (index, len(messages), len(message)))
-            print(message)
+        message = build_message(cfg["header"], cfg["channels"])
+        print("--- %d of %d chars ---" % (len(message), MAX_MESSAGE_CHARS))
+        print(message)
         return 0
 
     try:

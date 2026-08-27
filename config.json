@@ -3,10 +3,9 @@
   "port": 5054,
   "channel_index": 0,
   "header": "Marion mesh channels:",
-  "inter_message_delay_seconds": 6.0,
   "channels": [
-    { "name": "#weather", "desc": "3-day Marion forecast + NWS alerts" },
-    { "name": "#news", "desc": "central Ohio headlines" },
-    { "name": "#gas", "desc": "cheapest Marion gas prices" }
+    "#weather",
+    "#news",
+    "#gas"
   ]
 }

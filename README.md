@@ -8,14 +8,12 @@ companion (hash `0x63`, TCP 5054).
 
 ## How it works
 
-The channel list lives in `config.json`. On each run the bot renders every entry
-as `#name - description`, greedily packs those entries into messages of at most
-130 characters, and sends them to the configured channel.
+The channel list lives in `config.json`. On each run the bot posts a single
+message: the header line, then one channel name per line.
 
-Each message is self-contained rather than being one long string split at
-arbitrary points, so a dropped packet costs one group of channels instead of
-garbling the list. Channel sends are flood with no ACK, so there is no retry
-logic — just a fixed delay between messages to pace the repeater.
+The whole thing is built to fit inside MeshCore's 130-character limit. If the
+list ever grows past that, trailing channels are dropped and a warning is logged
+rather than sending something the radio will mangle.
 
 ## Install
 
@@ -33,7 +31,7 @@ Check what it will say before putting it on the air:
 python3 /opt/info/info.py --config /opt/info/config.json --dry-run
 ```
 
-Each line is printed with its character count so you can see the packing.
+The character count is printed above the message so you can see the headroom.
 
 Then install the timer:
 
@@ -57,9 +55,8 @@ journalctl -u info.service -n 50
 | --- | --- |
 | `host` / `port` | Companion TCP endpoint — `127.0.0.1:5054` |
 | `channel_index` | Channel to post to. `0` is public. |
-| `header` | Opens the first message. Set to `""` to omit. |
-| `inter_message_delay_seconds` | Pause between messages |
-| `channels` | List of `{"name": ..., "desc": ...}`. `desc` is optional. |
+| `header` | First line of the message. Set to `""` to omit. |
+| `channels` | List of channel names. A leading `#` is added if missing. |
 
 Adding a channel is a `config.json` edit — no code change, no restart needed,
 since the timer reads the file fresh on each run.

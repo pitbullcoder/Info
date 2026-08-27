@@ -1,4 +1,4 @@
-"""Tests for the Marion Info Bot message packer and broadcast loop."""
+"""Tests for the Marion Info Bot message builder and broadcast loop."""
 
 import asyncio
 import json
@@ -15,96 +15,84 @@ class RecordingSender:
     def __init__(self):
         self.calls = []
 
-    async def __call__(self, cfg, messages):
-        self.calls.append((cfg, list(messages)))
+    async def __call__(self, cfg, message):
+        self.calls.append((cfg, message))
 
 
-def ch(name, desc=None):
-    entry = {"name": name}
-    if desc is not None:
-        entry["desc"] = desc
-    return entry
+class NormalizeChannelTest(unittest.TestCase):
+    def test_hash_is_preserved(self):
+        self.assertEqual(info.normalize_channel("#news"), "#news")
 
-
-class FormatEntryTest(unittest.TestCase):
-    def test_name_and_description(self):
-        self.assertEqual(info.format_entry(ch("#news", "headlines")), "#news - headlines")
-
-    def test_bare_name_when_description_missing(self):
-        self.assertEqual(info.format_entry(ch("#news")), "#news")
-
-    def test_bare_name_when_description_empty(self):
-        self.assertEqual(info.format_entry(ch("#news", "   ")), "#news")
+    def test_hash_is_added_when_missing(self):
+        self.assertEqual(info.normalize_channel("news"), "#news")
 
     def test_whitespace_is_stripped(self):
-        self.assertEqual(info.format_entry(ch("  #news  ", "  headlines  ")), "#news - headlines")
+        self.assertEqual(info.normalize_channel("  #news  "), "#news")
+
+    def test_duplicate_hashes_are_collapsed(self):
+        self.assertEqual(info.normalize_channel("##news"), "#news")
 
 
-class BuildMessagesTest(unittest.TestCase):
-    def test_empty_channel_list_yields_header_only(self):
-        self.assertEqual(info.build_messages("Header:", []), ["Header:"])
+class BuildMessageTest(unittest.TestCase):
+    def test_expected_shape(self):
+        message = info.build_message(
+            "Marion mesh channels:", ["#weather", "#news", "#gas"]
+        )
+        self.assertEqual(
+            message,
+            "Marion mesh channels:\n#weather\n#news\n#gas",
+        )
 
-    def test_empty_header_and_channels_yields_nothing(self):
-        self.assertEqual(info.build_messages("", []), [])
-
-    def test_short_list_fits_in_one_message(self):
-        messages = info.build_messages("Chans:", [ch("#a", "one"), ch("#b", "two")])
-        self.assertEqual(messages, ["Chans:\n#a - one\n#b - two"])
-
-    def test_entries_are_separated_by_line_breaks(self):
-        messages = info.build_messages("Chans:", [ch("#a", "one"), ch("#b", "two")])
-        self.assertEqual(messages[0].splitlines(), ["Chans:", "#a - one", "#b - two"])
-
-    def test_every_message_respects_the_limit(self):
-        channels = [ch("#chan%02d" % i, "description number %d" % i) for i in range(12)]
-        messages = info.build_messages("Marion mesh channels:", channels)
-        self.assertGreater(len(messages), 1)
-        for message in messages:
-            self.assertLessEqual(len(message), info.MAX_MESSAGE_CHARS)
-
-    def test_no_entry_is_lost_across_messages(self):
-        channels = [ch("#chan%02d" % i, "description number %d" % i) for i in range(12)]
-        messages = info.build_messages("Marion mesh channels:", channels)
-        joined = " ".join(messages)
-        for entry in channels:
-            self.assertIn(entry["name"], joined)
-
-    def test_entry_landing_exactly_on_the_limit_is_kept_whole(self):
-        # Header plus separator plus entry lands on exactly the limit.
-        header = "H"
-        pad = info.MAX_MESSAGE_CHARS - len(header) - len(info.ENTRY_SEPARATOR)
-        entry = ch("#" + "x" * (pad - 1))
-        messages = info.build_messages(header, [entry], limit=info.MAX_MESSAGE_CHARS)
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(len(messages[0]), info.MAX_MESSAGE_CHARS)
-
-    def test_one_char_over_the_limit_splits(self):
-        header = "H"
-        pad = info.MAX_MESSAGE_CHARS - len(header) - len(info.ENTRY_SEPARATOR)
-        entry = ch("#" + "x" * pad)
-        messages = info.build_messages(header, [entry], limit=info.MAX_MESSAGE_CHARS)
-        self.assertEqual(len(messages), 2)
-        self.assertEqual(messages[0], header)
-
-    def test_oversized_entry_is_truncated_not_dropped(self):
-        entry = ch("#long", "d" * 400)
-        messages = info.build_messages("", [entry], limit=50)
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(len(messages[0]), 50)
-        self.assertTrue(messages[0].endswith("\u2026"))
-
-    def test_oversized_entry_does_not_disturb_its_neighbours(self):
-        channels = [ch("#a", "one"), ch("#long", "d" * 400), ch("#b", "two")]
-        messages = info.build_messages("", channels, limit=50)
-        joined = " ".join(messages)
-        self.assertIn("#a - one", joined)
-        self.assertIn("#b - two", joined)
-        for message in messages:
-            self.assertLessEqual(len(message), 50)
+    def test_lines_are_header_then_names(self):
+        message = info.build_message("Chans:", ["#a", "#b"])
+        self.assertEqual(message.splitlines(), ["Chans:", "#a", "#b"])
 
     def test_header_is_optional(self):
-        messages = info.build_messages(None, [ch("#a", "one")])
-        self.assertEqual(messages, ["#a - one"])
+        message = info.build_message("", ["#a", "#b"])
+        self.assertEqual(message.splitlines(), ["#a", "#b"])
+
+    def test_none_header_is_treated_as_absent(self):
+        self.assertEqual(info.build_message(None, ["#a"]), "#a")
+
+    def test_empty_everything_yields_empty_string(self):
+        self.assertEqual(info.build_message("", []), "")
+
+    def test_names_are_normalized(self):
+        message = info.build_message("Chans:", ["weather", " #news ", "##gas"])
+        self.assertEqual(message.splitlines(), ["Chans:", "#weather", "#news", "#gas"])
+
+    def test_result_stays_within_the_limit(self):
+        channels = ["#channel%02d" % i for i in range(40)]
+        message = info.build_message("Marion mesh channels:", channels)
+        self.assertLessEqual(len(message), info.MAX_MESSAGE_CHARS)
+
+    def test_overflow_drops_from_the_end_and_keeps_the_header(self):
+        channels = ["#channel%02d" % i for i in range(40)]
+        message = info.build_message("Chans:", channels)
+        lines = message.splitlines()
+        self.assertEqual(lines[0], "Chans:")
+        self.assertEqual(lines[1], "#channel00")
+        self.assertLess(len(lines) - 1, len(channels))
+
+    def test_a_list_landing_exactly_on_the_limit_is_kept_whole(self):
+        # Header plus one name plus the joining newline lands on the limit.
+        header = "H"
+        name_len = info.MAX_MESSAGE_CHARS - len(header) - 1
+        channels = ["#" + "x" * (name_len - 1)]
+        message = info.build_message(header, channels)
+        self.assertEqual(len(message), info.MAX_MESSAGE_CHARS)
+        self.assertEqual(len(message.splitlines()), 2)
+
+    def test_one_char_over_the_limit_drops_the_name(self):
+        header = "H"
+        name_len = info.MAX_MESSAGE_CHARS - len(header)
+        channels = ["#" + "x" * (name_len - 1)]
+        message = info.build_message(header, channels)
+        self.assertEqual(message, header)
+
+    def test_oversized_header_alone_is_truncated(self):
+        message = info.build_message("H" * 400, [], limit=20)
+        self.assertEqual(len(message), 20)
 
 
 class LoadConfigTest(unittest.TestCase):
@@ -115,15 +103,11 @@ class LoadConfigTest(unittest.TestCase):
         self.addCleanup(os.unlink, handle.name)
         return handle.name
 
-    def test_defaults_are_applied(self):
+    def test_header_default_is_applied(self):
         path = self._write(
-            {"host": "127.0.0.1", "port": 5054, "channel_index": 0, "channels": [ch("#a", "one")]}
+            {"host": "127.0.0.1", "port": 5054, "channel_index": 0, "channels": ["#a"]}
         )
-        cfg = info.load_config(path)
-        self.assertEqual(cfg["header"], "Marion mesh channels:")
-        self.assertEqual(
-            cfg["inter_message_delay_seconds"], info.DEFAULT_INTER_MESSAGE_DELAY_SECONDS
-        )
+        self.assertEqual(info.load_config(path)["header"], "Marion mesh channels:")
 
     def test_missing_required_key_is_rejected(self):
         path = self._write({"host": "127.0.0.1", "port": 5054, "channel_index": 0})
@@ -137,43 +121,46 @@ class LoadConfigTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             info.load_config(path)
 
-    def test_channel_without_name_is_rejected(self):
+    def test_non_string_channel_entry_is_rejected(self):
         path = self._write(
             {
                 "host": "127.0.0.1",
                 "port": 5054,
                 "channel_index": 0,
-                "channels": [{"desc": "nameless"}],
+                "channels": [{"name": "#a"}],
             }
+        )
+        with self.assertRaises(ValueError):
+            info.load_config(path)
+
+    def test_blank_channel_entry_is_rejected(self):
+        path = self._write(
+            {"host": "127.0.0.1", "port": 5054, "channel_index": 0, "channels": ["  "]}
         )
         with self.assertRaises(ValueError):
             info.load_config(path)
 
 
 class BroadcastTest(unittest.TestCase):
-    def _cfg(self, channels):
+    def _cfg(self, channels, header="Chans:"):
         return {
             "host": "127.0.0.1",
             "port": 5054,
             "channel_index": 0,
-            "header": "Chans:",
-            "inter_message_delay_seconds": 0,
+            "header": header,
             "channels": channels,
         }
 
-    def test_sender_receives_the_packed_messages(self):
+    def test_sender_receives_one_message(self):
         sender = RecordingSender()
-        cfg = self._cfg([ch("#a", "one"), ch("#b", "two")])
-        messages = asyncio.run(info.broadcast(cfg, sender=sender))
+        message = asyncio.run(info.broadcast(self._cfg(["#a", "#b"]), sender=sender))
         self.assertEqual(len(sender.calls), 1)
-        self.assertEqual(sender.calls[0][1], messages)
+        self.assertEqual(sender.calls[0][1], message)
 
     def test_sender_is_not_called_when_there_is_nothing_to_say(self):
         sender = RecordingSender()
-        cfg = self._cfg([])
-        cfg["header"] = ""
-        messages = asyncio.run(info.broadcast(cfg, sender=sender))
-        self.assertEqual(messages, [])
+        message = asyncio.run(info.broadcast(self._cfg([], header=""), sender=sender))
+        self.assertEqual(message, "")
         self.assertEqual(sender.calls, [])
 
 
@@ -183,7 +170,7 @@ class MainTest(unittest.TestCase):
             "host": "127.0.0.1",
             "port": 5054,
             "channel_index": 0,
-            "channels": [ch("#a", "one")],
+            "channels": ["#a"],
         }
         handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
         json.dump(payload, handle)
